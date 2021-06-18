@@ -3,11 +3,9 @@ import time
 import collections
 import itertools
 from operator import itemgetter
-from typing import List
 import multiprocessing as mp
 
 from preprocess import remove_punctuation, split_sentences, clean_word
-
 
 
 class log_time:
@@ -54,7 +52,7 @@ def read_file_and_get_bigrams(fname):
         except UnicodeDecodeError:
             print('UNICODE DECODE ERROR')
             return []
-        sentences = split_sentences(text)
+        sentences = split_sentences(remove_punctuation(text))
         bigrams = []
         for sent in sentences:
             splitted = sent.split()

@@ -1,4 +1,4 @@
-## Simplel POC of parallel mapreduce
+## Simple POC of parallel mapreduce
 This program creates bigrams from input nepali corpus
 
 ### Usage
