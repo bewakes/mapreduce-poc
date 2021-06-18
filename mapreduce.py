@@ -5,6 +5,7 @@ import itertools
 from operator import itemgetter
 import multiprocessing as mp
 import matplotlib.pyplot as plt
+import numpy as np
 
 from preprocess import remove_punctuation, split_sentences, clean_word
 
@@ -116,8 +117,9 @@ if __name__ == '__main__':
 
         time_taken.append(time.time() - start_time)
 
-    print(time_taken)
-    plt.plot(list(range(1, num_cpu+1)), time_taken)
+    plt.plot(np.arange(1, num_cpu+1), time_taken)
     plt.xlabel("number_of_processor")
+    plt.xticks(np.arange(1, num_cpu+1, 1))
+    plt.yticks(np.arange(min(time_taken), max(time_taken), 2))
     plt.ylabel("time_taken_in_seconds")
     plt.show()
