@@ -4,6 +4,7 @@ import collections
 import itertools
 from operator import itemgetter
 import multiprocessing as mp
+import matplotlib.pyplot as plt
 
 from preprocess import remove_punctuation, split_sentences, clean_word
 
@@ -96,11 +97,27 @@ def main(n_cpus):
 
 if __name__ == '__main__':
     print('running...')
-    if len(sys.argv) >= 2 and sys.argv[1] == 'p':
-        pcount = mp.cpu_count()
-        num_processors = min(pcount, int(sys.argv[2])) if len(sys.argv) >= 3 else pcount
-        with log_time(f'PARALLEL with {num_processors} cpus'):
-            main(num_processors)
-    else:
-        with log_time('Single process'):
+    # if len(sys.argv) >= 2 and sys.argv[1] == 'p':
+    #     pcount = mp.cpu_count()
+    #     num_processors = min(pcount, int(sys.argv[2])) if len(sys.argv) >= 3 else pcount
+    #     with log_time(f'PARALLEL with {num_processors} cpus'):
+    #         main(num_processors)
+    # else:
+    #     with log_time('Single process'):
+    #         main_no_parallel()
+    time_taken = []
+    num_cpu = mp.cpu_count()
+    for i in range(num_cpu):
+        start_time = time.time()
+        if i == 0:
             main_no_parallel()
+        else:
+            main(i+1)
+
+        time_taken.append(time.time() - start_time)
+
+    print(time_taken)
+    plt.plot(list(range(1, num_cpu+1)), time_taken)
+    plt.xlabel("number_of_processor")
+    plt.ylabel("time_taken_in_seconds")
+    plt.show()
