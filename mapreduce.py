@@ -1,60 +1,13 @@
 import sys
 import time
-from collections import Counter
+import collections
+import itertools
+from operator import itemgetter
 from typing import List
 import multiprocessing as mp
 
-from preprocess import get_suffixes, remove_punctuation, process_word_suffix
+from preprocess import remove_punctuation, split_sentences, clean_word
 
-DONE = '__DONE__'
-bucket_names = [
-    'क',
-    'ख',
-    'ग',
-    'घ',
-    'ङ',
-    'च',
-    'छ',
-    'ज',
-    'झ',
-    'ञ',
-    'ट',
-    'ठ',
-    'ड',
-    'ढ',
-    'ण',
-    'त',
-    'थ',
-    'द',
-    'ध',
-    'न',
-    'प',
-    'फ',
-    'ब',
-    'भ',
-    'म',
-    'य',
-    'र',
-    'ल',
-    'व',
-    'स',
-    'श',
-    'ष',
-    'ह',
-    'अ',
-    'आ'
-    'ई',
-    'इ',
-    'उ',
-    'ऊ',
-    'ॠ',
-    'ए',
-    'ऐ',
-    'ओ',
-    '*',
-]
-
-SUFFIXES = get_suffixes()
 
 
 class log_time:
@@ -68,98 +21,88 @@ class log_time:
         print(self.blockname, ': ', time.time() - self.time, 'seconds')
 
 
-def process_word(word: str) -> str:
-    word = remove_punctuation(word)
-    word_suffixes: List[str] = process_word_suffix(SUFFIXES, word)
-    if not word_suffixes:
-        return ''
-    return word_suffixes[0]
+class MapReducer:
+    # Modified from https://pymotw.com/2/multiprocessing/mapreduce.html
+    def __init__(self, mapper, reducer, partitioner, num_workers=None):
+        self.mapper = mapper
+        self.reducer = reducer
+        self.partitioner = partitioner
+        self.pool = mp.Pool(num_workers)
+
+    def __call__(self, inputs, chunksize=None):
+        map_responses = self.pool.map(self.mapper, inputs, chunksize)
+        partitioned_data = self.partitioner(itertools.chain(*map_responses))
+        reduced_values = self.pool.map(self.reducer, partitioned_data, chunksize)
+        return reduced_values
 
 
-def read_file(fname, buckets):
+def partitioner(mapped_values):
+    partitioned_data = collections.defaultdict(list)
+    for key, value in mapped_values:
+        partitioned_data[key].append(value)
+    return partitioned_data.items()
+
+
+def read_file_and_get_bigrams(fname):
     with open(fname) as f:
-        # The first line is just the url, omit it
         try:
+            # The first line is just the url, omit it
             f.readline()
-            words = f.read().split()
+            # The second line is title, omit that as well
+            f.readline()
+            text = f.read().strip()
         except UnicodeDecodeError:
             print('UNICODE DECODE ERROR')
-            return
-        for _w in words:
-            w = process_word(_w)
-            if not w:
+            return []
+        sentences = split_sentences(text)
+        bigrams = []
+        for sent in sentences:
+            splitted = sent.split()
+            if not splitted:
                 continue
-            q = buckets.get(w[0])
-            if q:
-                q.put(w)
-            else:
-                buckets['*'].put(w)
+            with_start_end = ['<start>', *map(clean_word, splitted), '<end>']
+            bigrams.extend(list(zip(with_start_end, with_start_end[1:])))
+        return [(x, 1) for x in bigrams]
 
 
-def perform_mapping(input_queue, buckets, pid):
-    while True:
-        fname = input_queue.get()
-        if fname == DONE:
-            input_queue.put(DONE)
-            return
-        read_file(fname.strip(), buckets)
+def reducer(kv):
+    big, counts = kv
+    return (big, sum(counts))
 
 
-def perform_reduce(items):
-    c = Counter(items)
-    return list(c.items())
+def write_result(result, fname):
+    with open(fname, 'w') as f:
+        for (bg1, bg2), v in result:
+            f.write(f'{bg1} {bg2} {v}\n')
+    print('done!!')
 
 
-def read_until_done(q):
-    while True:
-        item = q.get()
-        if item == DONE:
-            return
-        yield item
+def main_no_parallel():
+    # Input is the stream of filepaths from where data is read
+    inputs = map(lambda x: x.strip(), sys.stdin)
+    mapped = map(read_file_and_get_bigrams, inputs)
+    partitioned = partitioner(itertools.chain(*mapped))
+    result = list(itertools.chain(reducer(x) for x in partitioned))
+    result.sort(key=itemgetter(1), reverse=True)
+    write_result(result, 'single_process.out')
 
 
-def main():
-    # input queue contains filenames from where processes/mappers take the data
-    input_queue = mp.Queue()
-    # bucket queues are to group the mapper output
-    manager = mp.Manager()
-    bucket_queues = manager.dict()
-    for x in bucket_names:
-        bucket_queues[x] = manager.Queue()
-
-    # initialize processes
-    processes = []
-    pcount = mp.cpu_count()
-    print(pcount)
-
-    for i in range(pcount):
-        p = mp.Process(target=perform_mapping, args=(input_queue, bucket_queues, i))
-        p.start()
-        processes.append(p)
-
-    # map filename to queues
-    for i, filepath in enumerate(sys.stdin):
-        input_queue.put(filepath)
-    input_queue.put(DONE)
-
-    print('------------JOINING------------------')
-    for p in processes:
-        p.join()
-    print('------------JOINED------------------')
-
-    # TO indicate end of each bucket
-    for k, v in bucket_queues.items():
-        v.put(DONE)
-
-    print('REDUCERS')
-    # Now the reducers
-    with mp.Pool(pcount) as pool:
-        items = [list(read_until_done(x)) for x in bucket_queues.values()]
-        results = pool.map(perform_reduce, items)
-    for result in results:
-        for k, cnt in result:
-            print(f'{k},{cnt}')
+def main(n_cpus):
+    # Input is the stream of filepaths from where data is read
+    inputs = map(lambda x: x.strip(), sys.stdin)
+    mapreducer = MapReducer(read_file_and_get_bigrams, reducer, partitioner, num_workers=n_cpus)
+    result = mapreducer(inputs)
+    result.sort(key=itemgetter(1), reverse=True)
+    write_result(result, 'parallel.out')
 
 
 if __name__ == '__main__':
-    main()
+    print('running...')
+    if len(sys.argv) >= 2 and sys.argv[1] == 'p':
+        pcount = mp.cpu_count()
+        num_processors = min(pcount, int(sys.argv[2])) if len(sys.argv) >= 3 else pcount
+        with log_time(f'PARALLEL with {num_processors} cpus'):
+            main(num_processors)
+    else:
+        with log_time('Single process'):
+            main_no_parallel()
